@@ -229,7 +229,6 @@ def extract_area(text):
 def scrape_imovirtual(query, max_pages=1):
     results = []
     slug = query.strip().lower().replace(" ", "-")
-
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
             url = f"https://www.imovirtual.com/pt/resultados/comprar/apartamento/{slug}?page={page}"
@@ -250,7 +249,6 @@ def scrape_imovirtual(query, max_pages=1):
                             slug_val = it.get("slug")
                             area_val = it.get("areaInSquareMeters")
                             parsed_price = float(price_val) if price_val else None
-
                             if parsed_price and parsed_price >= 10000:
                                 results.append({
                                     "portal": "Imovirtual",
@@ -271,12 +269,10 @@ def scrape_imovirtual(query, max_pages=1):
                         price_elem = card.select_one('[data-cy="listing-item-price"]') or card.find(string=re.compile(r"€"))
                         title_elem = card.select_one('[data-cy="listing-item-title"]') or card.find(["h3", "h2"])
                         if not link_elem: continue
-
                         href = link_elem.get("href", "")
                         full_link = href if href.startswith("http") else f"https://www.imovirtual.com{href}"
                         card_text = card.get_text(" ", strip=True)
                         parsed_price = clean_num(price_elem.get_text() if hasattr(price_elem, "get_text") else str(price_elem))
-
                         if parsed_price and parsed_price >= 10000:
                             results.append({
                                 "portal": "Imovirtual",
@@ -299,7 +295,6 @@ def scrape_imovirtual(query, max_pages=1):
 def scrape_olx_imoveis(query, max_pages=1):
     results = []
     clean_loc = query.strip().lower().replace(" ", "-")
-
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
             url = f"https://www.olx.pt/imoveis/q-{clean_loc}/?page={page}"
@@ -312,13 +307,10 @@ def scrape_olx_imoveis(query, max_pages=1):
                     link_elem = card.find("a", href=True)
                     if not link_elem or not link_elem.get("href"): continue
                     href = link_elem["href"]
-                    
                     if "imovirtual.com" in href: continue
-
                     full_link = f"https://www.olx.pt{href}" if href.startswith("/") else href
                     title_elem = card.find(["h4", "h6"])
                     title = title_elem.get_text(strip=True) if title_elem else "Imóvel OLX"
-                    
                     text = card.get_text(" ", strip=True)
                     price_match = re.search(r"(\d[\d\s.,]*)\s*€", text)
                     if price_match:
@@ -339,13 +331,12 @@ def scrape_olx_imoveis(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 3. CUSTOJUSTO 
+# 3. CUSTOJUSTO (Bottom-Up Extractor)
 # ==============================================================================
 
 def scrape_custojusto(query, max_pages=1):
     results = []
     clean_query = urllib.parse.quote(query.strip())
-
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
             url = f"https://www.custojusto.pt/portugal/imobiliario/apartamentos-venda?q={clean_query}&o={page}"
@@ -353,21 +344,17 @@ def scrape_custojusto(query, max_pages=1):
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200: break
                 soup = BeautifulSoup(r.text, "lxml")
-                
                 links = soup.find_all("a", href=re.compile(r"-\d{7,10}$"))
                 for a in links:
                     href = a["href"]
                     if "/imobiliario/" not in href: continue
-                    
                     container = a.parent
                     for _ in range(3):
                         if container and "€" in container.get_text(): break
                         if container: container = container.parent
-                    
                     if not container: continue
                     text = container.get_text(" ", strip=True)
                     price_match = re.search(r"(\d[\d\s.]*)\s*€", text)
-                    
                     if price_match:
                         parsed_price = clean_num(price_match.group(1))
                         if parsed_price and parsed_price >= 10000:
@@ -375,7 +362,6 @@ def scrape_custojusto(query, max_pages=1):
                             if len(title) < 5:
                                 h_tag = container.find(["h2", "h3"])
                                 title = h_tag.get_text(strip=True) if h_tag else f"Imóvel em {query.title()}"
-                            
                             results.append({
                                 "portal": "CustoJusto",
                                 "title": title[:80],
@@ -397,7 +383,6 @@ def scrape_custojusto(query, max_pages=1):
 def scrape_century21(query, max_pages=1):
     results = []
     slug = query.strip().lower().replace(" ", "-")
-
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
             url = f"https://www.century21.pt/comprar/apartamentos/{slug}/?page={page}"
@@ -405,16 +390,14 @@ def scrape_century21(query, max_pages=1):
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200: break
                 soup = BeautifulSoup(r.text, "lxml")
-                
                 links = soup.find_all("a", href=re.compile(r"/imovel/"))
                 for a in links:
-                    href = a["href"]
-                    
+                    href = a.get("href")
+                    if not href: continue
                     container = a.parent
-                    for _ in range(4):
+                    for _ in range(5):
                         if container and "€" in container.get_text(): break
                         if container: container = container.parent
-                    
                     if not container: continue
                     text = container.get_text(" ", strip=True)
                     price_match = re.search(r"(\d[\d\s.,]*)\s*€", text)
@@ -423,9 +406,8 @@ def scrape_century21(query, max_pages=1):
                         if parsed_price and parsed_price >= 10000:
                             title = a.get_text(strip=True)
                             if len(title) < 5:
-                                h_tag = container.find(["h2", "h3"])
+                                h_tag = container.find(["h2", "h3", "h4", "h5", "h6"])
                                 title = h_tag.get_text(strip=True) if h_tag else f"Imóvel Century 21"
-
                             results.append({
                                 "portal": "Century 21",
                                 "title": title[:80],
@@ -441,30 +423,31 @@ def scrape_century21(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 5. CASA IOL (TVI Network - Universal DOM Extractor)
+# 5. PROPERSTAR (Universal DOM Extractor)
 # ==============================================================================
 
-def scrape_casaiol(query, max_pages=1):
+def scrape_properstar(query, max_pages=1):
     results = []
     slug = query.strip().lower().replace(" ", "-")
-
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://casa.iol.pt/comprar/apartamentos/{slug}?pagina={page}"
+            url = f"https://www.properstar.pt/portugal/{slug}/venda/apartamento-casas?p={page}"
             try:
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
-                if r.status_code != 200: break
-                soup = BeautifulSoup(r.text, "lxml")
+                if r.status_code != 200:
+                    url = f"https://www.properstar.pt/portugal/{slug}-distrito/venda/apartamento-casas?p={page}"
+                    r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
+                    if r.status_code != 200: break
                 
-                links = soup.find_all("a", href=re.compile(r"/imovel/"))
+                soup = BeautifulSoup(r.text, "lxml")
+                links = soup.find_all("a", href=re.compile(r"/imovel/|/detalhe/|/comprar/|/anuncio/"))
                 for a in links:
-                    href = a["href"]
-                    
+                    href = a.get("href")
+                    if not href: continue
                     container = a.parent
-                    for _ in range(4):
+                    for _ in range(5):
                         if container and "€" in container.get_text(): break
                         if container: container = container.parent
-                    
                     if not container: continue
                     text = container.get_text(" ", strip=True)
                     price_match = re.search(r"(\d[\d\s.,]*)\s*€", text)
@@ -473,17 +456,16 @@ def scrape_casaiol(query, max_pages=1):
                         if parsed_price and parsed_price >= 10000:
                             title = a.get_text(strip=True)
                             if len(title) < 5:
-                                h_tag = container.find(["h2", "h3"])
-                                title = h_tag.get_text(strip=True) if h_tag else f"Imóvel Casa iol"
-
+                                h_tag = container.find(["h2", "h3", "h4"])
+                                title = h_tag.get_text(strip=True) if h_tag else f"Imóvel Properstar"
                             results.append({
-                                "portal": "Casa iol",
+                                "portal": "Properstar",
                                 "title": title[:80],
                                 "price": parsed_price,
                                 "typology": extract_typology(text),
                                 "area_m2": extract_area(text),
                                 "location": query.title(),
-                                "link": href if href.startswith("http") else f"https://casa.iol.pt{href}"
+                                "link": href if href.startswith("http") else f"https://www.properstar.pt{href}"
                             })
                 time.sleep(0.3)
             except Exception:
@@ -499,7 +481,7 @@ PORTAL_MAP = {
     "OLX Imóveis": scrape_olx_imoveis,
     "CustoJusto": scrape_custojusto,
     "Century 21": scrape_century21,
-    "Casa iol": scrape_casaiol,
+    "Properstar": scrape_properstar,
 }
 
 def run_multi_scraper(selected_portals, location, pages):
@@ -622,8 +604,8 @@ with st.sidebar:
 
     selected_portals = st.multiselect(
         L["portals"],
-        ["Imovirtual", "OLX Imóveis", "CustoJusto", "Century 21", "Casa iol"],
-        default=["Imovirtual", "OLX Imóveis", "CustoJusto", "Century 21", "Casa iol"]
+        ["Imovirtual", "OLX Imóveis", "CustoJusto", "Century 21", "Properstar"],
+        default=["Imovirtual", "OLX Imóveis", "CustoJusto", "Century 21", "Properstar"]
     )
 
     pages_per_portal = st.slider(L["pages"], 1, 4, 2)
