@@ -196,7 +196,6 @@ TRANSLATIONS = {
 # ==============================================================================
 
 BROWSER_IMPERSONATE = "chrome124"
-SAFARI_IMPERSONATE = "safari15_5"
 REQUEST_TIMEOUT = 16
 
 COMMON_HEADERS = {
@@ -206,25 +205,21 @@ COMMON_HEADERS = {
 }
 
 def clean_num(val):
-    if val is None:
-        return None
+    if val is None: return None
     cleaned = str(val).replace("€", "").replace("m²", "").replace("m2", "").replace("\xa0", " ").replace(".", "").replace(",", ".").strip()
     cleaned = re.sub(r"(\d)\s+(\d)", r"\1\2", cleaned)
     match = re.search(r"\d+(?:\.\d+)?", cleaned)
     return float(match.group()) if match else None
 
 def extract_typology(text):
-    if not text:
-        return "N/A"
+    if not text: return "N/A"
     match = re.search(r"\b(T\d\+?)\b", str(text), re.IGNORECASE)
     return match.group(1).upper() if match else "N/A"
 
 def extract_area(text):
-    if not text:
-        return None
+    if not text: return None
     match = re.search(r"(\d+[\d\s.,]*)\s*(?:m2|m²)", str(text), re.IGNORECASE)
-    if match:
-        return clean_num(match.group(1))
+    if match: return clean_num(match.group(1))
     return None
 
 # ==============================================================================
@@ -243,25 +238,54 @@ def scrape_imovirtual(query, max_pages=1):
                 if r.status_code != 200: break
                 soup = BeautifulSoup(r.text, "lxml")
                 next_data = soup.find("script", id="__NEXT_DATA__")
+                extracted_json = False
+
                 if next_data and next_data.string:
-                    data = json.loads(next_data.string)
-                    items = data.get("props", {}).get("pageProps", {}).get("data", {}).get("searchAds", {}).get("items", [])
-                    for it in items:
-                        title = it.get("title", f"Imóvel em {query.title()}")
-                        price_val = it.get("totalPrice", {}).get("value")
-                        slug_val = it.get("slug")
-                        area_val = it.get("areaInSquareMeters")
-                        parsed_price = float(price_val) if price_val else None
+                    try:
+                        data = json.loads(next_data.string)
+                        items = data.get("props", {}).get("pageProps", {}).get("data", {}).get("searchAds", {}).get("items", [])
+                        for it in items:
+                            title = it.get("title", f"Imóvel em {query.title()}")
+                            price_val = it.get("totalPrice", {}).get("value")
+                            slug_val = it.get("slug")
+                            area_val = it.get("areaInSquareMeters")
+                            parsed_price = float(price_val) if price_val else None
+
+                            if parsed_price and parsed_price >= 10000:
+                                results.append({
+                                    "portal": "Imovirtual",
+                                    "title": title,
+                                    "price": parsed_price,
+                                    "typology": extract_typology(title),
+                                    "area_m2": clean_num(area_val),
+                                    "location": query.title(),
+                                    "link": f"https://www.imovirtual.com/pt/anuncio/{slug_val}" if slug_val else url,
+                                })
+                        if items: extracted_json = True
+                    except Exception: pass
+
+                if not extracted_json:
+                    cards = soup.select('article[data-cy="listing-item"], article')
+                    for card in cards:
+                        link_elem = card.select_one('a[href*="/anuncio/"]') or card.find("a", href=True)
+                        price_elem = card.select_one('[data-cy="listing-item-price"]') or card.find(string=re.compile(r"€"))
+                        title_elem = card.select_one('[data-cy="listing-item-title"]') or card.find(["h3", "h2"])
+                        if not link_elem: continue
+
+                        href = link_elem.get("href", "")
+                        full_link = href if href.startswith("http") else f"https://www.imovirtual.com{href}"
+                        card_text = card.get_text(" ", strip=True)
+                        parsed_price = clean_num(price_elem.get_text() if hasattr(price_elem, "get_text") else str(price_elem))
 
                         if parsed_price and parsed_price >= 10000:
                             results.append({
                                 "portal": "Imovirtual",
-                                "title": title,
+                                "title": title_elem.get_text(strip=True) if title_elem else f"Apartamento em {query.title()}",
                                 "price": parsed_price,
-                                "typology": extract_typology(title),
-                                "area_m2": clean_num(area_val),
+                                "typology": extract_typology(card_text),
+                                "area_m2": extract_area(card_text),
                                 "location": query.title(),
-                                "link": f"https://www.imovirtual.com/pt/anuncio/{slug_val}" if slug_val else url,
+                                "link": full_link.split("?")[0],
                             })
                 time.sleep(0.3)
             except Exception:
@@ -286,13 +310,10 @@ def scrape_olx_imoveis(query, max_pages=1):
                 cards = soup.find_all(attrs={"data-cy": "l-card"})
                 for card in cards:
                     link_elem = card.find("a", href=True)
-                    if not link_elem or not link_elem.get("href"):
-                        continue
+                    if not link_elem or not link_elem.get("href"): continue
                     href = link_elem["href"]
                     
-                    # BLOCK IMOVIRTUAL LINKS - Keep Native OLX Only
-                    if "imovirtual.com" in href:
-                        continue
+                    if "imovirtual.com" in href: continue
 
                     full_link = f"https://www.olx.pt{href}" if href.startswith("/") else href
                     title_elem = card.find(["h4", "h6"])
@@ -318,7 +339,7 @@ def scrape_olx_imoveis(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 3. CUSTOJUSTO (Bottom-Up Extractor)
+# 3. CUSTOJUSTO 
 # ==============================================================================
 
 def scrape_custojusto(query, max_pages=1):
@@ -333,13 +354,11 @@ def scrape_custojusto(query, max_pages=1):
                 if r.status_code != 200: break
                 soup = BeautifulSoup(r.text, "lxml")
                 
-                # Resilient extractor based on link pattern
                 links = soup.find_all("a", href=re.compile(r"-\d{7,10}$"))
                 for a in links:
                     href = a["href"]
                     if "/imobiliario/" not in href: continue
                     
-                    # Traverse up to find the card container
                     container = a.parent
                     for _ in range(3):
                         if container and "€" in container.get_text(): break
@@ -372,31 +391,25 @@ def scrape_custojusto(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 4. CASA SAPO (Safari Impersonation + Bottom-Up Extractor)
+# 4. CENTURY 21 (Universal DOM Extractor)
 # ==============================================================================
 
-def scrape_casasapo(query, max_pages=1):
+def scrape_century21(query, max_pages=1):
     results = []
-    # Safari headers generally bypass strict cloudflare walls much better than Chrome
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pt-PT,pt;q=0.9",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
-        "Referer": "https://www.google.pt/"
-    }
-    
+    slug = query.strip().lower().replace(" ", "-")
+
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://casa.sapo.pt/venda-apartamentos/?q={urllib.parse.quote(query)}&pn={page}"
+            url = f"https://www.century21.pt/comprar/apartamentos/{slug}/?page={page}"
             try:
-                r = session.get(url, headers=headers, impersonate=SAFARI_IMPERSONATE, timeout=REQUEST_TIMEOUT)
+                r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
+                if r.status_code != 200: break
                 soup = BeautifulSoup(r.text, "lxml")
                 
-                links = soup.find_all("a", href=True)
+                links = soup.find_all("a", href=re.compile(r"/imovel/"))
                 for a in links:
                     href = a["href"]
-                    if "/comprar-" not in href and "/imovel/" not in href: continue
-                        
+                    
                     container = a.parent
                     for _ in range(4):
                         if container and "€" in container.get_text(): break
@@ -408,15 +421,19 @@ def scrape_casasapo(query, max_pages=1):
                     if price_match:
                         parsed_price = clean_num(price_match.group(1))
                         if parsed_price and parsed_price >= 10000:
-                            title = a.get_text(strip=True) or container.find(["h2","h3","span"]).get_text(strip=True) if container.find(["h2","h3","span"]) else f"Imóvel em {query.title()}"
+                            title = a.get_text(strip=True)
+                            if len(title) < 5:
+                                h_tag = container.find(["h2", "h3"])
+                                title = h_tag.get_text(strip=True) if h_tag else f"Imóvel Century 21"
+
                             results.append({
-                                "portal": "Casa Sapo",
+                                "portal": "Century 21",
                                 "title": title[:80],
                                 "price": parsed_price,
                                 "typology": extract_typology(text),
                                 "area_m2": extract_area(text),
                                 "location": query.title(),
-                                "link": href if href.startswith("http") else f"https://casa.sapo.pt{href}"
+                                "link": href if href.startswith("http") else f"https://www.century21.pt{href}"
                             })
                 time.sleep(0.3)
             except Exception:
@@ -424,27 +441,25 @@ def scrape_casasapo(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 5. SUPERCASA (Safari Impersonation + Bottom-Up Extractor)
+# 5. CASA IOL (TVI Network - Universal DOM Extractor)
 # ==============================================================================
 
-def scrape_supercasa(query, max_pages=1):
+def scrape_casaiol(query, max_pages=1):
     results = []
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pt-PT,pt;q=0.9",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
-        "Referer": "https://supercasa.pt/"
-    }
+    slug = query.strip().lower().replace(" ", "-")
 
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://supercasa.pt/comprar-casas?s={urllib.parse.quote(query)}&pagina={page}"
+            url = f"https://casa.iol.pt/comprar/apartamentos/{slug}?pagina={page}"
             try:
-                r = session.get(url, headers=headers, impersonate=SAFARI_IMPERSONATE, timeout=REQUEST_TIMEOUT)
+                r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
+                if r.status_code != 200: break
                 soup = BeautifulSoup(r.text, "lxml")
                 
-                links = soup.find_all("a", href=re.compile(r"/imovel/|/comprar-"))
+                links = soup.find_all("a", href=re.compile(r"/imovel/"))
                 for a in links:
+                    href = a["href"]
+                    
                     container = a.parent
                     for _ in range(4):
                         if container and "€" in container.get_text(): break
@@ -456,16 +471,19 @@ def scrape_supercasa(query, max_pages=1):
                     if price_match:
                         parsed_price = clean_num(price_match.group(1))
                         if parsed_price and parsed_price >= 10000:
-                            href = a["href"] if a["href"].startswith("http") else f"https://supercasa.pt{a['href']}"
-                            title = a.get_text(strip=True) or container.find(["h2","h3"]).get_text(strip=True) if container.find(["h2","h3"]) else f"Imóvel em {query.title()}"
+                            title = a.get_text(strip=True)
+                            if len(title) < 5:
+                                h_tag = container.find(["h2", "h3"])
+                                title = h_tag.get_text(strip=True) if h_tag else f"Imóvel Casa iol"
+
                             results.append({
-                                "portal": "SuperCasa",
+                                "portal": "Casa iol",
                                 "title": title[:80],
                                 "price": parsed_price,
                                 "typology": extract_typology(text),
                                 "area_m2": extract_area(text),
                                 "location": query.title(),
-                                "link": href
+                                "link": href if href.startswith("http") else f"https://casa.iol.pt{href}"
                             })
                 time.sleep(0.3)
             except Exception:
@@ -480,8 +498,8 @@ PORTAL_MAP = {
     "Imovirtual": scrape_imovirtual,
     "OLX Imóveis": scrape_olx_imoveis,
     "CustoJusto": scrape_custojusto,
-    "Casa Sapo": scrape_casasapo,
-    "SuperCasa": scrape_supercasa,
+    "Century 21": scrape_century21,
+    "Casa iol": scrape_casaiol,
 }
 
 def run_multi_scraper(selected_portals, location, pages):
@@ -511,7 +529,7 @@ def run_multi_scraper(selected_portals, location, pages):
     return deduped, diagnostics
 
 # ==============================================================================
-# STREAMLIT UI SETUP
+# STREAMLIT UI & TRANSLATION CONTROLLER
 # ==============================================================================
 
 st.set_page_config(page_title="Portugal Real Estate Intelligence | By Max", page_icon="🇵🇹", layout="wide")
@@ -604,8 +622,8 @@ with st.sidebar:
 
     selected_portals = st.multiselect(
         L["portals"],
-        ["Imovirtual", "OLX Imóveis", "CustoJusto", "Casa Sapo", "SuperCasa"],
-        default=["Imovirtual", "OLX Imóveis", "CustoJusto", "Casa Sapo", "SuperCasa"]
+        ["Imovirtual", "OLX Imóveis", "CustoJusto", "Century 21", "Casa iol"],
+        default=["Imovirtual", "OLX Imóveis", "CustoJusto", "Century 21", "Casa iol"]
     )
 
     pages_per_portal = st.slider(L["pages"], 1, 4, 2)
