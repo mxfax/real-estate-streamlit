@@ -192,7 +192,7 @@ TRANSLATIONS = {
 }
 
 # ==============================================================================
-# NETWORK & REQUEST SETUP
+# NETWORK & BROWSER CONFIGURATION
 # ==============================================================================
 
 BROWSER_IMPERSONATE = "chrome124"
@@ -211,6 +211,10 @@ COMMON_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
+# ==============================================================================
+# DATA NORMALIZATION HELPERS
+# ==============================================================================
+
 def clean_num(val):
     if val is None:
         return None
@@ -224,6 +228,8 @@ def clean_num(val):
         .replace(",", ".")
         .strip()
     )
+    # Handle space-separated thousands like "540 000"
+    cleaned = re.sub(r"(\d)\s+(\d)", r"\1\2", cleaned)
     match = re.search(r"\d+(?:\.\d+)?", cleaned)
     return float(match.group()) if match else None
 
@@ -242,7 +248,7 @@ def extract_area(text):
     return None
 
 # ==============================================================================
-# 1. IMOVIRTUAL
+# 1. IMOVIRTUAL SCRAPER
 # ==============================================================================
 
 def scrape_imovirtual(query, max_pages=1):
@@ -324,7 +330,7 @@ def scrape_imovirtual(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 2. OLX IMÓVEIS (Direct OLX ads)
+# 2. OLX IMÓVEIS
 # ==============================================================================
 
 def scrape_olx_imoveis(query, max_pages=1):
@@ -382,25 +388,32 @@ def scrape_olx_imoveis(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 3. CUSTOJUSTO (Clean Path /apartamentos-venda)
+# 3. CUSTOJUSTO (Direct Regional Taxonomy Parser)
 # ==============================================================================
 
 def scrape_custojusto(query, max_pages=1):
     results = []
-    clean_query = urllib.parse.quote(query.strip())
+    slug = query.strip().lower().replace(" ", "-")
 
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://www.custojusto.pt/portugal/imobiliario/apartamentos-venda?q={clean_query}&o={page}"
+            # CustoJusto uses /{district}/imobiliario/apartamentos-venda
+            url = f"https://www.custojusto.pt/{slug}/imobiliario/apartamentos-venda?o={page}"
             try:
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
-                if r.status_code != 200:
-                    break
+                if r.status_code != 200 or len(r.text) < 1500:
+                    # Fallback query parameter
+                    url = f"https://www.custojusto.pt/portugal/imobiliario/apartamentos-venda?q={urllib.parse.quote(query)}&o={page}"
+                    r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
+                    if r.status_code != 200:
+                        break
 
                 soup = BeautifulSoup(r.text, "lxml")
-                cards = soup.select(".container_list, li.listing-item, div.listing-item")
+                
+                # Match all potential ad containers
+                cards = soup.select(".container_list, li.listing-item, div.listing-item, div.item")
                 if not cards:
-                    cards = soup.find_all("a", href=re.compile(r"/imobiliario/"))
+                    cards = soup.find_all("a", href=re.compile(r"/imobiliario/|/apartamentos/"))
 
                 for card in cards:
                     link_elem = card if card.name == "a" else card.find("a", href=True)
@@ -414,13 +427,14 @@ def scrape_custojusto(query, max_pages=1):
                     title_elem = card.find(["h2", "h3", "h5"]) or link_elem
                     title = title_elem.get_text(strip=True) if title_elem else f"Imóvel em {query.title()}"
 
-                    price_elem = card.find(string=re.compile(r"€")) or card.select_one(".price, .clean_price, span[class*='price']")
-                    parsed_price = clean_num(str(price_elem)) if price_elem else None
+                    # Price regex extraction directly from card text
+                    card_text = card.get_text(" ", strip=True)
+                    price_match = re.search(r"(\d[\d\s.]*)\s*€", card_text)
+                    parsed_price = clean_num(price_match.group(1)) if price_match else None
 
                     if parsed_price is None or parsed_price < 10000:
                         continue
 
-                    card_text = card.get_text(" ", strip=True)
                     full_link = href if href.startswith("http") else f"https://www.custojusto.pt{href}"
 
                     results.append({
@@ -438,7 +452,7 @@ def scrape_custojusto(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 4. BPI EXPRESSO IMOBILIÁRIO
+# 4. BPI EXPRESSO IMOBILIÁRIO (Direct Municipality Path)
 # ==============================================================================
 
 def scrape_bpi_expresso(query, max_pages=1):
@@ -451,11 +465,12 @@ def scrape_bpi_expresso(query, max_pages=1):
 
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://bpiexpressoimobiliario.pt/comprar/apartamentos/{slug}?pagina={page}"
+            # BPI route format requires district/concelho duplication or direct term
+            url = f"https://bpiexpressoimobiliario.pt/comprar/apartamento/{slug}/{slug}?pagina={page}"
             try:
                 r = session.get(url, headers=headers, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
-                if r.status_code != 200:
-                    url = f"https://bpiexpressoimobiliario.pt/comprar/imoveis/{slug}?pagina={page}"
+                if r.status_code != 200 or len(r.text) < 1500:
+                    url = f"https://bpiexpressoimobiliario.pt/comprar/apartamentos/{slug}?pagina={page}"
                     r = session.get(url, headers=headers, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                     if r.status_code != 200:
                         break
@@ -467,13 +482,14 @@ def scrape_bpi_expresso(query, max_pages=1):
                     if not link_elem:
                         continue
 
-                    price_elem = card.find(string=re.compile(r"€"))
-                    parsed_price = clean_num(str(price_elem)) if price_elem else None
+                    card_text = card.get_text(" ", strip=True)
+                    price_match = re.search(r"(\d[\d\s.]*)\s*€", card_text)
+                    parsed_price = clean_num(price_match.group(1)) if price_match else None
+
                     if parsed_price is None or parsed_price < 10000:
                         continue
 
                     title_elem = card.find(["h2", "h3", "h4"])
-                    card_text = card.get_text(" ", strip=True)
                     href = link_elem["href"]
                     full_link = href if href.startswith("http") else f"https://bpiexpressoimobiliario.pt{href}"
 
@@ -518,16 +534,16 @@ def scrape_supercasa(query, max_pages=1):
                     if not link_elem or not link_elem.get("href"):
                         continue
 
-                    title_elem = card.find(["h2", "h3"]) or link_elem
-                    price_elem = card.select_one(".property-price, .price") or card.find(string=re.compile(r"€"))
-                    parsed_price = clean_num(str(price_elem)) if price_elem else None
+                    card_text = card.get_text(" ", strip=True)
+                    price_match = re.search(r"(\d[\d\s.]*)\s*€", card_text)
+                    parsed_price = clean_num(price_match.group(1)) if price_match else None
 
                     if parsed_price is None or parsed_price < 10000:
                         continue
 
+                    title_elem = card.find(["h2", "h3"]) or link_elem
                     href = link_elem["href"]
                     full_link = href if href.startswith("http") else f"https://supercasa.pt{href}"
-                    card_text = card.get_text(" ", strip=True)
 
                     results.append({
                         "portal": "SuperCasa",
@@ -544,7 +560,7 @@ def scrape_supercasa(query, max_pages=1):
     return results
 
 # ==============================================================================
-# DISPATCHER
+# MULTI-THREAD DISPATCHER
 # ==============================================================================
 
 PORTAL_MAP = {
@@ -582,7 +598,7 @@ def run_multi_scraper(selected_portals, location, pages):
     return deduped, diagnostics
 
 # ==============================================================================
-# UI SETUP & LANGUAGE CONTROLLER
+# STREAMLIT UI SETUP & TRANSLATION CONTROLLER
 # ==============================================================================
 
 st.set_page_config(page_title="Portugal Real Estate Intelligence | By Max", page_icon="🇵🇹", layout="wide")
@@ -590,7 +606,6 @@ st.set_page_config(page_title="Portugal Real Estate Intelligence | By Max", page
 if "lang" not in st.session_state:
     st.session_state["lang"] = "EN"
 
-# Sidebar Top Language Selector
 with st.sidebar:
     lang_col1, lang_col2 = st.columns([1, 2])
     with lang_col1:
@@ -670,7 +685,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Sidebar Options
 with st.sidebar:
     st.markdown(f"### {L['search_setup']}")
     location_input = st.text_input(L["location"], value="Lisboa")
@@ -707,7 +721,7 @@ with st.sidebar:
 
     search_btn = st.button(L["btn_search"], use_container_width=True, type="primary")
 
-# Execute Search
+# Execution
 if search_btn:
     if not selected_portals:
         st.warning(L["warning_select"])
@@ -723,7 +737,7 @@ if search_btn:
             status_text = ", ".join([f"{k}: {v}" for k, v in diag.items() if isinstance(v, int)])
             st.success(L["success_status"].format(total=len(raw_results), status=status_text))
 
-        # Price per m² & Market Deal Scoring
+        # Calculate Price/m² and Deal Score
         for it in raw_results:
             if it["price"] and it["area_m2"] and it["area_m2"] > 10:
                 it["price_per_m2"] = round(it["price"] / it["area_m2"], 1)
@@ -775,7 +789,6 @@ if "real_estate_data" in st.session_state:
     if data:
         df = pd.DataFrame(data)
 
-        # Dashboard KPIs
         c1, c2, c3, c4 = st.columns(4)
         c1.metric(L["kpi_total"], len(df))
         valid_prices = df["price"].dropna()
