@@ -3,6 +3,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import urllib.parse
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests
@@ -10,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 # ==============================================================================
-# CONFIG & NETWORK CLIENT
+# NETWORK & BROWSER CONFIGURATION
 # ==============================================================================
 
 BROWSER_IMPERSONATE = "chrome124"
@@ -30,12 +31,12 @@ COMMON_HEADERS = {
 }
 
 # ==============================================================================
-# NORMALIZATION HELPERS
+# DATA NORMALIZATION HELPERS
 # ==============================================================================
 
 def clean_number(text):
-    """Extracts first valid integer/float from a string representation."""
-    if not text:
+    """Extracts first valid integer/float from a string."""
+    if text is None:
         return None
     cleaned = (
         str(text)
@@ -67,7 +68,7 @@ def extract_area(text):
     return None
 
 # ==============================================================================
-# 1. IMOVIRTUAL SCRAPER (Next.js Data + Selectors)
+# 1. IMOVIRTUAL SCRAPER (Next.js Data + DOM Fallback)
 # ==============================================================================
 
 def scrape_imovirtual(query, max_pages=1):
@@ -89,7 +90,7 @@ def scrape_imovirtual(query, max_pages=1):
 
                 soup = BeautifulSoup(r.text, "lxml")
 
-                # Strategy A: Extract from embedded __NEXT_DATA__ JSON script
+                # Strategy A: Extract embedded Next.js JSON state
                 next_data = soup.find("script", id="__NEXT_DATA__")
                 extracted_json = False
                 if next_data and next_data.string:
@@ -125,7 +126,7 @@ def scrape_imovirtual(query, max_pages=1):
                 if extracted_json:
                     continue
 
-                # Strategy B: DOM element fallback
+                # Strategy B: DOM element traversal
                 cards = soup.select('article[data-cy="listing-item"], article')
                 for card in cards:
                     link_elem = card.select_one('a[href*="/anuncio/"]') or card.find("a", href=True)
@@ -159,11 +160,11 @@ def scrape_imovirtual(query, max_pages=1):
 
 def scrape_casa_sapo(query, max_pages=1):
     results = []
-    slug = query.strip().lower().replace(" ", "-")
+    encoded_q = urllib.parse.quote(query.strip())
 
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://casa.sapo.pt/comprar-apartamentos/{slug}/?pn={page}"
+            url = f"https://casa.sapo.pt/venda-apartamentos/?q={encoded_q}&pn={page}"
             try:
                 r = session.get(
                     url,
@@ -209,11 +210,11 @@ def scrape_casa_sapo(query, max_pages=1):
 
 def scrape_supercasa(query, max_pages=1):
     results = []
-    slug = query.strip().lower().replace(" ", "-")
+    encoded_q = urllib.parse.quote(query.strip())
 
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://supercasa.pt/comprar-casas/{slug}?pagina={page}"
+            url = f"https://supercasa.pt/comprar-casas?s={encoded_q}&pagina={page}"
             try:
                 r = session.get(
                     url,
@@ -228,8 +229,11 @@ def scrape_supercasa(query, max_pages=1):
                 cards = soup.select(".property-list-item, .property-card, div[class*='property']")
 
                 for card in cards:
-                    link_elem = card.select_one("a[href*='/imovel/'], a[href*='/comprar-']")
+                    link_elem = card.select_one("a[href*='/imovel/'], a[href*='/comprar-'], a.property-link")
                     if not link_elem or not link_elem.get("href"):
+                        link_elem = card.find("a", href=True)
+
+                    if not link_elem:
                         continue
 
                     title_elem = card.find(["h2", "h3"]) or link_elem
@@ -241,7 +245,7 @@ def scrape_supercasa(query, max_pages=1):
 
                     results.append({
                         "portal": "SuperCasa",
-                        "title": title_elem.get_text(strip=True) if title_elem else "Imóvel SuperCasa",
+                        "title": title_elem.get_text(strip=True) if title_elem else f"Imóvel em {query.title()}",
                         "price": clean_number(str(price_elem)) if price_elem else None,
                         "typology": extract_typology(card_text),
                         "area_m2": extract_area(card_text),
@@ -254,54 +258,92 @@ def scrape_supercasa(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 4. ERA IMOBILIÁRIA SCRAPER
+# 4. ERA IMOBILIÁRIA (Internal REST API + Fallback)
 # ==============================================================================
 
 def scrape_era(query, max_pages=1):
     results = []
-    slug = query.strip().lower().replace(" ", "-")
+    headers = {
+        **COMMON_HEADERS,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.era.pt/imoveis",
+    }
+    encoded_q = urllib.parse.quote(query.strip())
 
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://www.era.pt/imoveis/comprar/{slug}?pagina={page}"
+            # Query the JSON backend service directly
+            api_url = f"https://www.era.pt/api/search/properties?locationText={encoded_q}&page={page}&pageSize=24&businessType=1"
+            found_via_api = False
             try:
                 r = session.get(
-                    url,
+                    api_url,
+                    headers=headers,
+                    impersonate=BROWSER_IMPERSONATE,
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    items = data.get("properties") or data.get("items") or data.get("data") or []
+                    for it in items:
+                        title = it.get("title") or it.get("name") or f"Imóvel ERA em {query.title()}"
+                        price = it.get("price") or it.get("value")
+                        slug = it.get("id") or it.get("reference") or it.get("slug")
+                        area = it.get("usefulArea") or it.get("grossArea") or it.get("area")
+                        typology = it.get("typology") or it.get("tipologia") or extract_typology(title)
+
+                        results.append({
+                            "portal": "ERA",
+                            "title": title,
+                            "price": clean_number(price),
+                            "typology": str(typology).upper() if typology else "N/A",
+                            "area_m2": clean_number(area),
+                            "location": query.title(),
+                            "link": f"https://www.era.pt/imovel/{slug}" if slug else "https://www.era.pt",
+                        })
+                    if items:
+                        found_via_api = True
+            except Exception:
+                pass
+
+            if found_via_api:
+                continue
+
+            # Fallback DOM parser
+            try:
+                fallback_url = f"https://www.era.pt/imoveis?localizacao={encoded_q}&pagina={page}"
+                r_fallback = session.get(
+                    fallback_url,
                     headers=COMMON_HEADERS,
                     impersonate=BROWSER_IMPERSONATE,
                     timeout=REQUEST_TIMEOUT,
                 )
-                if r.status_code != 200:
-                    break
+                if r_fallback.status_code == 200:
+                    soup = BeautifulSoup(r_fallback.text, "lxml")
+                    cards = soup.select(".property-item, .card-imovel, div[class*='imovel']")
+                    for card in cards:
+                        link_elem = card.find("a", href=True)
+                        if not link_elem:
+                            continue
+                        price_elem = card.find(string=re.compile(r"€"))
+                        title_elem = card.find(["h2", "h3", "h4"])
+                        card_text = card.get_text(" ", strip=True)
+                        href = link_elem["href"]
+                        full_link = href if href.startswith("http") else f"https://www.era.pt{href}"
 
-                soup = BeautifulSoup(r.text, "lxml")
-                cards = soup.select(".property-item, .imovel-item, div[class*='card']")
-
-                for card in cards:
-                    link_elem = card.find("a", href=re.compile(r"/imovel/|/comprar/"))
-                    if not link_elem or not link_elem.get("href"):
-                        continue
-
-                    title_elem = card.find(["h3", "h2"]) or card.find("div", class_=re.compile(r"title"))
-                    price_elem = card.find(string=re.compile(r"€"))
-
-                    title = title_elem.get_text(strip=True) if title_elem else "Anúncio ERA"
-                    href = link_elem["href"]
-                    full_link = href if href.startswith("http") else f"https://www.era.pt{href}"
-                    card_text = card.get_text(" ", strip=True)
-
-                    results.append({
-                        "portal": "ERA",
-                        "title": title,
-                        "price": clean_number(str(price_elem)) if price_elem else None,
-                        "typology": extract_typology(card_text),
-                        "area_m2": extract_area(card_text),
-                        "location": query.title(),
-                        "link": full_link.split("?")[0],
-                    })
-                time.sleep(0.3)
+                        results.append({
+                            "portal": "ERA",
+                            "title": title_elem.get_text(strip=True) if title_elem else "Imóvel ERA",
+                            "price": clean_number(str(price_elem)) if price_elem else None,
+                            "typology": extract_typology(card_text),
+                            "area_m2": extract_area(card_text),
+                            "location": query.title(),
+                            "link": full_link.split("?")[0],
+                        })
             except Exception:
-                break
+                pass
+            time.sleep(0.3)
+
     return results
 
 # ==============================================================================
@@ -348,7 +390,7 @@ def scrape_idealista(query, max_pages=1, proxy_url=None):
     return results
 
 # ==============================================================================
-# DISPATCHER
+# MULTI-THREAD DISPATCHER
 # ==============================================================================
 
 PORTAL_MAP = {
@@ -377,9 +419,9 @@ def run_multi_scraper(selected_portals, location, pages, idealista_proxy=None):
                 res = fut.result()
                 all_data.extend(res)
             except Exception as e:
-                st.error(f"Error executing scraper for {portal_name}: {e}")
+                st.error(f"Scraper error on {portal_name}: {e}")
 
-    # Remove duplicates matching portal and link
+    # Deduplicate matches
     seen = set()
     deduped = []
     for item in all_data:
@@ -390,7 +432,7 @@ def run_multi_scraper(selected_portals, location, pages, idealista_proxy=None):
     return deduped
 
 # ==============================================================================
-# UI SETUP & STYLING
+# STREAMLIT UI & INTERFACE
 # ==============================================================================
 
 st.set_page_config(
@@ -480,7 +522,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Sidebar
 with st.sidebar:
     st.markdown("### 🔍 Search Setup")
     location_input = st.text_input("City or Region", value="Lisboa", help="e.g. Lisboa, Porto, Cascais, Sintra, Coimbra")
@@ -518,7 +559,7 @@ with st.sidebar:
 
     search_btn = st.button("🚀 Fetch Properties", use_container_width=True, type="primary")
 
-# Application Run State
+# Execute Search
 if search_btn:
     if not selected_portals:
         st.warning("Please select at least one portal from the sidebar.")
@@ -531,7 +572,7 @@ if search_btn:
                 idealista_proxy=proxy_input if "Idealista" in selected_portals else None,
             )
 
-        # Telemetry check to verify incoming data
+        # Telemetry counter to inspect what each portal returned
         portal_counts = {}
         for it in raw_results:
             portal_counts[it["portal"]] = portal_counts.get(it["portal"], 0) + 1
@@ -542,7 +583,7 @@ if search_btn:
             status_text = ", ".join([f"{k}: {v}" for k, v in portal_counts.items()])
             st.info(f"Fetched {len(raw_results)} total listings ({status_text}).")
 
-        # Apply Filters
+        # Filtering
         filtered = []
         for r in raw_results:
             p = r["price"]
@@ -552,7 +593,7 @@ if search_btn:
                 continue
             filtered.append(r)
 
-        # Apply Sorting
+        # Sorting
         if sort_choice == "Lowest Price First (€ ↑)":
             filtered.sort(key=lambda x: x["price"] if x["price"] is not None else float("inf"))
         elif sort_choice == "Highest Price First (€ ↓)":
@@ -567,7 +608,7 @@ if "real_estate_data" in st.session_state:
     if data:
         df = pd.DataFrame(data)
 
-        # Metrics display
+        # Summary Metrics
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Available Listings", len(df))
         valid_prices = df["price"].dropna()
@@ -590,7 +631,7 @@ if "real_estate_data" in st.session_state:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Grid view
+        # Display Grid
         st.dataframe(
             df[["portal", "title", "price", "typology", "area_m2", "link"]],
             column_config={
@@ -607,7 +648,7 @@ if "real_estate_data" in st.session_state:
     else:
         st.warning("No listings matched your active price or typology filters.")
 
-# Footer
+# Footer Attribution
 st.markdown(
     """
     <div class="footer-container">
