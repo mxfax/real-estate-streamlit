@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 # ==============================================================================
-# BROWSER CLIENT & NETWORK CONFIGURATION
+# NETWORK & BROWSER CONFIGURATION
 # ==============================================================================
 
 BROWSER_IMPERSONATE = "chrome124"
@@ -35,6 +35,7 @@ COMMON_HEADERS = {
 # ==============================================================================
 
 def clean_num(val):
+    """Extracts clean numeric values from formatted currency/area strings."""
     if val is None:
         return None
     cleaned = (
@@ -51,12 +52,14 @@ def clean_num(val):
     return float(match.group()) if match else None
 
 def extract_typology(text):
+    """Extracts standard Portuguese typology tags (T0 to T6+)."""
     if not text:
         return "N/A"
     match = re.search(r"\b(T\d\+?)\b", str(text), re.IGNORECASE)
     return match.group(1).upper() if match else "N/A"
 
 def extract_area(text):
+    """Extracts square meter values."""
     if not text:
         return None
     match = re.search(r"(\d+[\d\s.,]*)\s*(?:m2|m²)", str(text), re.IGNORECASE)
@@ -65,7 +68,7 @@ def extract_area(text):
     return None
 
 # ==============================================================================
-# 1. IMOVIRTUAL SCRAPER
+# 1. IMOVIRTUAL SCRAPER (Next.js Hydration JSON + DOM)
 # ==============================================================================
 
 def scrape_imovirtual(query, max_pages=1):
@@ -147,7 +150,7 @@ def scrape_imovirtual(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 2. OLX IMÓVEIS (Direct Native OLX Links)
+# 2. OLX IMÓVEIS (Native OLX Ads Only)
 # ==============================================================================
 
 def scrape_olx_imoveis(query, max_pages=1):
@@ -171,7 +174,7 @@ def scrape_olx_imoveis(query, max_pages=1):
 
                     href = link_elem["href"]
 
-                    # Filter out syndicated partner links to ensure OLX-native URLs
+                    # Filter or normalize syndicated partner ads so they point to OLX
                     if "imovirtual.com" in href:
                         match_id = re.search(r"-ID([a-zA-Z0-9]+)\.html", href)
                         if match_id:
@@ -207,51 +210,53 @@ def scrape_olx_imoveis(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 3. CUSTOJUSTO (Clean Regional Search)
+# 3. CUSTOJUSTO (Nationwide Real Estate Search Feed)
 # ==============================================================================
 
 def scrape_custojusto(query, max_pages=1):
     results = []
-    slug = query.strip().lower().replace(" ", "-")
+    clean_query = urllib.parse.quote(query.strip())
 
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://www.custojusto.pt/{slug}/imobiliario/comprar-casas?o={page}"
+            url = f"https://www.custojusto.pt/portugal/imobiliario/q/{clean_query}?o={page}"
             try:
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200:
-                    url = f"https://www.custojusto.pt/portugal/imobiliario/comprar-casas?q={urllib.parse.quote(query)}&o={page}"
-                    r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
-                    if r.status_code != 200:
-                        break
+                    break
 
                 soup = BeautifulSoup(r.text, "lxml")
-                cards = soup.select(".container_list, .listing_item, a[href*='/imobiliario/']")
-                for c in cards:
-                    link_elem = c if c.name == "a" else c.find("a", href=True)
+                cards = soup.select("a[href*='/imobiliario/'], div.container_list")
+
+                for card in cards:
+                    link_elem = card if card.name == "a" else card.find("a", href=True)
                     if not link_elem or not link_elem.get("href"):
                         continue
 
                     href = link_elem["href"]
-                    if href.endswith("/imobiliario") or href.endswith("/imobiliario/"):
+                    if href.rstrip("/").endswith("/imobiliario") or href.rstrip("/").endswith("/comprar-casas"):
                         continue
 
-                    title_elem = c.find(["h2", "h3"]) or link_elem
-                    price_elem = c.find(string=re.compile(r"€"))
+                    title_elem = card.find(["h2", "h3"]) or link_elem
+                    title = title_elem.get_text(strip=True) if title_elem else f"Imóvel em {query.title()}"
+
+                    price_elem = card.find(string=re.compile(r"€")) or card.select_one(".price, span[class*='price']")
                     parsed_price = clean_num(str(price_elem)) if price_elem else None
 
                     if parsed_price is None or parsed_price < 10000:
                         continue
 
-                    card_text = c.get_text(" ", strip=True)
+                    card_text = card.get_text(" ", strip=True)
+                    full_link = href if href.startswith("http") else f"https://www.custojusto.pt{href}"
+
                     results.append({
                         "portal": "CustoJusto",
-                        "title": title_elem.get_text(strip=True) if title_elem else f"Imóvel em {query.title()}",
+                        "title": title,
                         "price": parsed_price,
-                        "typology": extract_typology(card_text),
+                        "typology": extract_typology(title + " " + card_text),
                         "area_m2": extract_area(card_text),
                         "location": query.title(),
-                        "link": href if href.startswith("http") else f"https://www.custojusto.pt{href}"
+                        "link": full_link.split("?")[0]
                     })
                 time.sleep(0.2)
             except Exception:
@@ -259,23 +264,28 @@ def scrape_custojusto(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 4. BPI EXPRESSO IMOBILIÁRIO (Server-Side HTML)
+# 4. BPI EXPRESSO IMOBILIÁRIO (Canonical .net Domain)
 # ==============================================================================
 
 def scrape_bpi_expresso(query, max_pages=1):
     results = []
     slug = query.strip().lower().replace(" ", "-")
 
+    headers = {
+        **COMMON_HEADERS,
+        "Referer": "https://bpiexpressoimobiliario.net/",
+    }
+
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://bpiexpressoimobiliario.pt/comprar/apartamentos/{slug}?pagina={page}"
+            url = f"https://bpiexpressoimobiliario.net/comprar/apartamento/{slug}?pagina={page}"
             try:
-                r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
+                r = session.get(url, headers=headers, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200:
                     break
 
                 soup = BeautifulSoup(r.text, "lxml")
-                cards = soup.select(".card-imovel, .imovel-card, div[class*='property-card'], .card")
+                cards = soup.select(".card-imovel, .imovel-card, div[class*='property-card'], .card, article")
                 for card in cards:
                     link_elem = card.find("a", href=True)
                     if not link_elem:
@@ -289,7 +299,7 @@ def scrape_bpi_expresso(query, max_pages=1):
                     title_elem = card.find(["h2", "h3", "h4"])
                     card_text = card.get_text(" ", strip=True)
                     href = link_elem["href"]
-                    full_link = href if href.startswith("http") else f"https://bpiexpressoimobiliario.pt{href}"
+                    full_link = href if href.startswith("http") else f"https://bpiexpressoimobiliario.net{href}"
 
                     results.append({
                         "portal": "BPI Expresso",
@@ -306,23 +316,30 @@ def scrape_bpi_expresso(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 5. SUPERCASA (Query-Driven Endpoint)
+# 5. SUPERCASA (Canonical Regional Route)
 # ==============================================================================
 
 def scrape_supercasa(query, max_pages=1):
     results = []
+    slug = query.strip().lower().replace(" ", "-")
+
+    headers = {
+        **COMMON_HEADERS,
+        "Referer": "https://supercasa.pt/",
+    }
+
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://supercasa.pt/comprar-casas?s={urllib.parse.quote(query)}&pagina={page}"
+            url = f"https://supercasa.pt/comprar-casas/{slug}?pagina={page}"
             try:
-                r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
+                r = session.get(url, headers=headers, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200:
                     break
 
                 soup = BeautifulSoup(r.text, "lxml")
-                cards = soup.select(".property-list-item, .property-card, div[class*='property']")
+                cards = soup.select(".property-list-item, .property-card, div[class*='property'], article")
                 for card in cards:
-                    link_elem = card.select_one("a[href*='/imovel/'], a[href*='/comprar-'], a.property-link") or card.find("a", href=True)
+                    link_elem = card.select_one("a[href*='/imovel/'], a[href*='/comprar-']") or card.find("a", href=True)
                     if not link_elem or not link_elem.get("href"):
                         continue
 
