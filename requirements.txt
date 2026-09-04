@@ -1,0 +1,6 @@
+streamlit
+beautifulsoup4
+lxml
+curl_cffi
+pandas
+openpyxl
