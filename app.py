@@ -173,7 +173,7 @@ TRANSLATIONS = {
         "tab_simulator": "💰 Іпотека та дохідність",
         "tab_diagnostics": "🛠️ Діагностика парсерів",
         "btn_export": "📥 Завантажити в Excel (.xlsx)",
-        "col_portal": "Портал",
+        "col_portal": "Portal",
         "col_deal": "Оцінка угоди",
         "col_title": "Заголовок",
         "col_price": "Ціна (€)",
@@ -547,39 +547,28 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Stateful multi-attempt sidebar collapse (robust on desktop and mobile)
-if "should_collapse_sidebar" not in st.session_state:
-    st.session_state["should_collapse_sidebar"] = False
-
-if st.session_state["should_collapse_sidebar"]:
+# Force sidebar to open on initial app load (overriding mobile auto-collapse)
+if "app_initialized" not in st.session_state:
+    st.session_state["app_initialized"] = True
     components.html(
         """
         <script>
-            let attempts = 0;
-            const collapseTimer = setInterval(() => {
+            setTimeout(() => {
                 const parentDoc = window.parent.document;
-                const btn = parentDoc.querySelector('button[data-testid="stSidebarCollapseButton"]') 
-                         || parentDoc.querySelector('[data-testid="stSidebarHeader"] button')
-                         || parentDoc.querySelector('section[data-testid="stSidebar"] button');
-                
                 const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
-                const isExpanded = sidebar && sidebar.getAttribute('aria-expanded') !== 'false';
-
-                if (btn && isExpanded) {
-                    btn.click();
-                    clearInterval(collapseTimer);
+                const isCollapsed = sidebar && sidebar.getAttribute('aria-expanded') === 'false';
+                if (isCollapsed) {
+                    const openBtn = parentDoc.querySelector('button[data-testid="stSidebarCollapseButton"]')
+                                 || parentDoc.querySelector('[data-testid="stSidebarHeader"] button')
+                                 || parentDoc.querySelector('button[kind="header"]');
+                    if (openBtn) openBtn.click();
                 }
-                attempts++;
-                if (attempts > 15) {
-                    clearInterval(collapseTimer);
-                }
-            }, 100);
+            }, 250);
         </script>
         """,
         height=0,
         width=0,
     )
-    st.session_state["should_collapse_sidebar"] = False
 
 if "lang" not in st.session_state:
     st.session_state["lang"] = "EN"
@@ -766,7 +755,36 @@ if search_btn:
     if not selected_portals:
         st.warning(L["warning_select"])
     else:
-        st.session_state["should_collapse_sidebar"] = True
+        # Immediate collapse script executed right when Fetch is clicked
+        components.html(
+            """
+            <script>
+                let attempts = 0;
+                const collapseInterval = setInterval(() => {
+                    const doc = window.parent.document;
+                    const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+                    const isExpanded = sidebar && sidebar.getAttribute('aria-expanded') !== 'false';
+
+                    // Try desktop collapse chevron, mobile header button, or sidebar backdrop
+                    const closeBtn = doc.querySelector('button[data-testid="stSidebarCollapseButton"]')
+                                  || doc.querySelector('[data-testid="stSidebarHeader"] button')
+                                  || doc.querySelector('button[aria-label="Close sidebar"]')
+                                  || doc.querySelector('[data-testid="stSidebarBackdrop"]');
+
+                    if (closeBtn && isExpanded) {
+                        closeBtn.click();
+                        clearInterval(collapseInterval);
+                    }
+                    attempts++;
+                    if (attempts > 20) {
+                        clearInterval(collapseInterval);
+                    }
+                }, 100);
+            </script>
+            """,
+            height=0,
+            width=0,
+        )
 
         with st.spinner(L["fetching"].format(count=len(selected_portals), loc=location_input)):
             raw_results, diag = run_multi_scraper(selected_portals, location_input, pages_per_portal)
