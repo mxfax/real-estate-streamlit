@@ -43,7 +43,10 @@ TRANSLATIONS = {
         "kpi_median_price": "Median Listing Price",
         "kpi_median_m2": "Median Market €/m²",
         "kpi_portals": "Active Portals",
-        "tab_grid": "📋 Listings Grid",
+        "view_mode": "View Style",
+        "view_cards": "📱 Mobile Cards",
+        "view_table": "💻 Detailed Table",
+        "tab_grid": "📋 Listings View",
         "tab_analytics": "📊 Market Analytics",
         "tab_simulator": "💰 Mortgage & Investment Simulator",
         "tab_diagnostics": "🛠️ Scraper Diagnostics",
@@ -56,7 +59,7 @@ TRANSLATIONS = {
         "col_area": "Area (m²)",
         "col_m2": "Price/m²",
         "col_link": "Direct Link",
-        "link_text": "Open Listing",
+        "link_text": "Open Listing ↗",
         "sim_title": "Interactive Mortgage & Yield Calculator",
         "sim_caption": "Calculate your estimated monthly payment and rental yield on any property in your results.",
         "prop_price": "Property Price (€)",
@@ -101,7 +104,10 @@ TRANSLATIONS = {
         "kpi_median_price": "Preço Mediano",
         "kpi_median_m2": "Mediana de Mercado €/m²",
         "kpi_portals": "Portais a Responder",
-        "tab_grid": "📋 Grelha de Imóveis",
+        "view_mode": "Modo de Exibição",
+        "view_cards": "📱 Cartões Mobile",
+        "view_table": "💻 Tabela Completa",
+        "tab_grid": "📋 Visualização de Imóveis",
         "tab_analytics": "📊 Análise de Mercado",
         "tab_simulator": "💰 Simulador de Crédito & ROI",
         "tab_diagnostics": "🛠️ Diagnóstico dos Scrapers",
@@ -114,7 +120,7 @@ TRANSLATIONS = {
         "col_area": "Área (m²)",
         "col_m2": "Preço/m²",
         "col_link": "Link Direto",
-        "link_text": "Ver Anúncio",
+        "link_text": "Ver Anúncio ↗",
         "sim_title": "Simulador Interativo de Crédito e Rentabilidade",
         "sim_caption": "Calcule a mensalidade estimada e a rentabilidade bruta para qualquer imóvel.",
         "prop_price": "Preço do Imóvel (€)",
@@ -159,7 +165,10 @@ TRANSLATIONS = {
         "kpi_median_price": "Медіанна ціна",
         "kpi_median_m2": "Медіана ринку €/м²",
         "kpi_portals": "Активних порталів",
-        "tab_grid": "📋 Список оголошень",
+        "view_mode": "Режим перегляду",
+        "view_cards": "📱 Мобільні картки",
+        "view_table": "💻 Повна таблиця",
+        "tab_grid": "📋 Список об'єктів",
         "tab_analytics": "📊 Аналітика ринку",
         "tab_simulator": "💰 Іпотека та дохідність",
         "tab_diagnostics": "🛠️ Діагностика парсерів",
@@ -172,7 +181,7 @@ TRANSLATIONS = {
         "col_area": "Площа (м²)",
         "col_m2": "Ціна/м²",
         "col_link": "Посилання",
-        "link_text": "Відкрити",
+        "link_text": "Відкрити ↗",
         "sim_title": "Інтерактивний калькулятор іпотеки та доходу",
         "sim_caption": "Розрахуйте щомісячний внесок та річний дохід від оренди для обраного житла.",
         "prop_price": "Вартість об'єкта (€)",
@@ -368,7 +377,7 @@ def scrape_custojusto(query, max_pages=1):
                             if len(title) < 5:
                                 h_tag = container.find(["h2", "h3"])
                                 title = h_tag.get_text(strip=True) if h_tag else f"Imóvel em {query.title()}"
-                            
+
                             full_link = urllib.parse.urljoin(base_url, href)
 
                             results.append({
@@ -418,7 +427,7 @@ def scrape_century21(query, max_pages=1):
                             if len(title) < 5:
                                 h_tag = container.find(["h2", "h3", "h4", "h5", "h6"])
                                 title = h_tag.get_text(strip=True) if h_tag else f"Imóvel Century 21"
-                            
+
                             full_link = urllib.parse.urljoin(base_url, href)
 
                             results.append({
@@ -452,7 +461,7 @@ def scrape_properstar(query, max_pages=1):
                     url = f"{base_url}/portugal/{slug}-distrito/venda/apartamento-casas?p={page}"
                     r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                     if r.status_code != 200: break
-                
+
                 soup = BeautifulSoup(r.text, "lxml")
                 links = soup.find_all("a", href=re.compile(r"/imovel/|/detalhe/|/comprar/|/anuncio/"))
                 for a in links:
@@ -472,7 +481,7 @@ def scrape_properstar(query, max_pages=1):
                             if len(title) < 5:
                                 h_tag = container.find(["h2", "h3", "h4"])
                                 title = h_tag.get_text(strip=True) if h_tag else f"Imóvel Properstar"
-                            
+
                             full_link = urllib.parse.urljoin(base_url, href)
 
                             results.append({
@@ -535,10 +544,10 @@ st.set_page_config(
     page_title="Portugal Real Estate Intelligence | By Max",
     page_icon="🇵🇹",
     layout="wide",
-    initial_sidebar_state="expanded"  # Open on start
+    initial_sidebar_state="expanded"
 )
 
-# Stateful collapse controller
+# Stateful multi-attempt sidebar collapse (robust on desktop and mobile)
 if "should_collapse_sidebar" not in st.session_state:
     st.session_state["should_collapse_sidebar"] = False
 
@@ -546,10 +555,26 @@ if st.session_state["should_collapse_sidebar"]:
     components.html(
         """
         <script>
-            const sidebarBtn = window.parent.document.querySelector('button[data-testid="stSidebarCollapseButton"]');
-            if (sidebarBtn) {
-                sidebarBtn.click();
-            }
+            let attempts = 0;
+            const collapseTimer = setInterval(() => {
+                const parentDoc = window.parent.document;
+                // Try standard collapse button, mobile header button, or aria selector
+                const btn = parentDoc.querySelector('button[data-testid="stSidebarCollapseButton"]') 
+                         || parentDoc.querySelector('[data-testid="stSidebarHeader"] button')
+                         || parentDoc.querySelector('section[data-testid="stSidebar"] button');
+                
+                const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
+                const isExpanded = sidebar && sidebar.getAttribute('aria-expanded') !== 'false';
+
+                if (btn && isExpanded) {
+                    btn.click();
+                    clearInterval(collapseTimer);
+                }
+                attempts++;
+                if (attempts > 15) {
+                    clearInterval(collapseTimer);
+                }
+            }, 100);
         </script>
         """,
         height=0,
@@ -581,33 +606,33 @@ st.markdown(
     .banner-container {{
         background: radial-gradient(circle at 10% 20%, #1e3c72 0%, #172a4d 90%);
         border-radius: 18px;
-        padding: 34px;
+        padding: 24px;
         color: #ffffff;
-        box-shadow: 0 12px 30px rgba(0,0,0,0.3);
-        margin-bottom: 25px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+        margin-bottom: 20px;
         border: 1px solid rgba(255, 255, 255, 0.12);
         position: relative;
     }}
     .banner-container::after {{
         content: "🇵🇹";
         position: absolute;
-        right: 25px;
-        top: 15px;
-        font-size: 6.5rem;
-        opacity: 0.15;
+        right: 18px;
+        top: 10px;
+        font-size: 5rem;
+        opacity: 0.14;
     }}
     .banner-title {{
-        font-size: 2.3rem;
+        font-size: 1.8rem;
         font-weight: 800;
         margin: 0;
         letter-spacing: -0.5px;
     }}
     .banner-sub {{
-        font-size: 1.05rem;
+        font-size: 0.95rem;
         color: #d1d5db;
-        margin-top: 8px;
-        max-width: 680px;
-        line-height: 1.5;
+        margin-top: 6px;
+        max-width: 650px;
+        line-height: 1.4;
     }}
     .badge-author {{
         display: inline-flex;
@@ -615,18 +640,81 @@ st.markdown(
         background: rgba(255, 255, 255, 0.15);
         backdrop-filter: blur(10px);
         border: 1px solid rgba(255, 255, 255, 0.25);
-        padding: 5px 14px;
-        border-radius: 30px;
-        font-size: 0.85rem;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.8rem;
         font-weight: 600;
         color: #ffffff;
-        margin-top: 14px;
+        margin-top: 10px;
+    }}
+    /* Mobile-Optimized Property Card */
+    .prop-card {{
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 12px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+        border: 1px solid #e5e7eb;
+    }}
+    .prop-card-header {{
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 8px;
+    }}
+    .prop-portal-badge {{
+        background: #eef2ff;
+        color: #3730a3;
+        font-size: 0.75rem;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 6px;
+    }}
+    .prop-deal-badge {{
+        font-size: 0.75rem;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 6px;
+    }}
+    .deal-bargain {{ background: #d1fae5; color: #065f46; }}
+    .deal-fair {{ background: #f3f4f6; color: #374151; }}
+    .deal-premium {{ background: #fee2e2; color: #991b1b; }}
+    .prop-card-title {{
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #111827;
+        margin: 6px 0;
+        line-height: 1.35;
+    }}
+    .prop-card-price {{
+        font-size: 1.35rem;
+        font-weight: 800;
+        color: #1e3a8a;
+    }}
+    .prop-meta-row {{
+        display: flex;
+        gap: 12px;
+        font-size: 0.85rem;
+        color: #6b7280;
+        margin: 8px 0 12px 0;
+    }}
+    .prop-btn {{
+        display: block;
+        width: 100%;
+        text-align: center;
+        background: #2563eb;
+        color: #ffffff !important;
+        font-weight: 700;
+        font-size: 0.9rem;
+        padding: 10px 14px;
+        border-radius: 8px;
+        text-decoration: none !important;
     }}
     .footer {{
         text-align: center;
-        padding: 40px 0 20px 0;
+        padding: 30px 0 20px 0;
         color: #9ca3af;
-        font-size: 0.85rem;
+        font-size: 0.82rem;
     }}
     </style>
 
@@ -680,13 +768,12 @@ if search_btn:
     if not selected_portals:
         st.warning(L["warning_select"])
     else:
-        # Trigger collapse of the sidebar right as search begins
-        st.session_state["should_collapse_sidebar"] = True
+        st.session["should_collapse_sidebar"] = True
 
         with st.spinner(L["fetching"].format(count=len(selected_portals), loc=location_input)):
             raw_results, diag = run_multi_scraper(selected_portals, location_input, pages_per_portal)
 
-        st.session_state["diagnostics"] = diag
+        st.session["diagnostics"] = diag
 
         if not raw_results:
             st.error(L["no_results"])
@@ -694,7 +781,7 @@ if search_btn:
             status_text = ", ".join([f"{k}: {v}" for k, v in diag.items() if isinstance(v, int)])
             st.success(L["success_status"].format(total=len(raw_results), status=status_text))
 
-        # Price per m² & Market Deal Scoring
+        # Calculate Price per m² & Market Deal Scoring
         for it in raw_results:
             if it["price"] and it["area_m2"] and it["area_m2"] > 10:
                 it["price_per_m2"] = round(it["price"] / it["area_m2"], 1)
@@ -709,12 +796,16 @@ if search_btn:
                 diff = ((it["price_per_m2"] - median_m2) / median_m2) * 100
                 if diff <= -15:
                     it["deal_status"] = L["bargain_badge"]
+                    it["deal_class"] = "deal-bargain"
                 elif diff >= 25:
                     it["deal_status"] = L["premium_badge"]
+                    it["deal_class"] = "deal-premium"
                 else:
                     it["deal_status"] = L["fair_badge"]
+                    it["deal_class"] = "deal-fair"
             else:
                 it["deal_status"] = "N/A"
+                it["deal_class"] = "deal-fair"
 
         # Apply Filters
         filtered = []
@@ -736,12 +827,12 @@ if search_btn:
         elif sort_choice == "m2":
             filtered.sort(key=lambda x: x["price_per_m2"] if x["price_per_m2"] is not None else float("inf"))
 
-        st.session_state["real_estate_data"] = filtered
-        st.session_state["median_m2"] = median_m2
+        st.session["real_estate_data"] = filtered
+        st.session["median_m2"] = median_m2
 
 # Render Output View
-if "real_estate_data" in st.session_state:
-    data = st.session_state["real_estate_data"]
+if "real_estate_data" in st.session:
+    data = st.session["real_estate_data"]
 
     if data:
         df = pd.DataFrame(data)
@@ -751,7 +842,7 @@ if "real_estate_data" in st.session_state:
         c1.metric(L["kpi_total"], len(df))
         valid_prices = df["price"].dropna()
         c2.metric(L["kpi_median_price"], f"{valid_prices.median():,.0f} €" if not valid_prices.empty else "N/A")
-        c3.metric(L["kpi_median_m2"], f"{st.session_state.get('median_m2', 0):,.0f} €/m²")
+        c3.metric(L["kpi_median_m2"], f"{st.session.get('median_m2', 0):,.0f} €/m²")
         c4.metric(L["kpi_portals"], df["portal"].nunique())
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -764,33 +855,73 @@ if "real_estate_data" in st.session_state:
         ])
 
         with tab1:
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                df.to_excel(writer, index=False, sheet_name="Imoveis")
+            col_exp, col_mode = st.columns([2, 1])
+            with col_exp:
+                buf = io.BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                    df.to_excel(writer, index=False, sheet_name="Imoveis")
 
-            st.download_button(
-                label=L["btn_export"],
-                data=buf.getvalue(),
-                file_name=f"imoveis_{location_input.lower().replace(' ', '_')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+                st.download_button(
+                    label=L["btn_export"],
+                    data=buf.getvalue(),
+                    file_name=f"imoveis_{location_input.lower().replace(' ', '_')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            with col_mode:
+                view_style = st.radio(
+                    L["view_mode"],
+                    [L["view_cards"], L["view_table"]],
+                    horizontal=True,
+                    label_visibility="collapsed"
+                )
 
-            st.dataframe(
-                df[["portal", "deal_status", "title", "price", "typology", "area_m2", "price_per_m2", "link"]],
-                column_config={
-                    "portal": st.column_config.TextColumn(L["col_portal"], width="small"),
-                    "deal_status": st.column_config.TextColumn(L["col_deal"], width="medium"),
-                    "title": st.column_config.TextColumn(L["col_title"], width="large"),
-                    "price": st.column_config.NumberColumn(L["col_price"], format="%.0f €"),
-                    "typology": st.column_config.TextColumn(L["col_typology"], width="small"),
-                    "area_m2": st.column_config.NumberColumn(L["col_area"], format="%.0f m²"),
-                    "price_per_m2": st.column_config.NumberColumn(L["col_m2"], format="%.0f €/m²"),
-                    "link": st.column_config.LinkColumn(L["col_link"], display_text=L["link_text"])
-                },
-                use_container_width=True,
-                hide_index=True
-            )
+            # Option A: Mobile-Optimized Responsive Cards View
+            if view_style == L["view_cards"]:
+                for _, row in df.iterrows():
+                    deal_cls = row.get("deal_class", "deal-fair")
+                    deal_stat = row.get("deal_status", "N/A")
+                    m2_txt = f"{row['price_per_m2']:,.0f} €/m²" if row.get("price_per_m2") else "N/A"
+                    area_txt = f"{row['area_m2']:.0f} m²" if row.get("area_m2") else "N/A"
+                    price_txt = f"{row['price']:,.0f} €" if row.get("price") else "Sob Consulta"
+
+                    st.markdown(
+                        f"""
+                        <div class="prop-card">
+                            <div class="prop-card-header">
+                                <span class="prop-portal-badge">{row['portal']}</span>
+                                <span class="prop-deal-badge {deal_cls}">{deal_stat}</span>
+                            </div>
+                            <div class="prop-card-price">{price_txt}</div>
+                            <div class="prop-card-title">{row['title']}</div>
+                            <div class="prop-meta-row">
+                                <span>📐 <b>{row['typology']}</b></span>
+                                <span>📏 {area_txt}</span>
+                                <span>📊 {m2_txt}</span>
+                            </div>
+                            <a class="prop-btn" href="{row['link']}" target="_blank" rel="noopener noreferrer">{L['link_text']}</a>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+            # Option B: Desktop Wide Spreadsheet Grid View
+            else:
+                st.dataframe(
+                    df[["portal", "deal_status", "title", "price", "typology", "area_m2", "price_per_m2", "link"]],
+                    column_config={
+                        "portal": st.column_config.TextColumn(L["col_portal"], width="small"),
+                        "deal_status": st.column_config.TextColumn(L["col_deal"], width="medium"),
+                        "title": st.column_config.TextColumn(L["col_title"], width="large"),
+                        "price": st.column_config.NumberColumn(L["col_price"], format="%.0f €"),
+                        "typology": st.column_config.TextColumn(L["col_typology"], width="small"),
+                        "area_m2": st.column_config.NumberColumn(L["col_area"], format="%.0f m²"),
+                        "price_per_m2": st.column_config.NumberColumn(L["col_m2"], format="%.0f €/m²"),
+                        "link": st.column_config.LinkColumn(L["col_link"], display_text=L["link_text"])
+                    },
+                    use_container_width=True,
+                    hide_index=True
+                )
 
         with tab2:
             st.subheader(L["tab_analytics"])
@@ -844,7 +975,7 @@ if "real_estate_data" in st.session_state:
 
         with tab4:
             st.subheader(L["tab_diagnostics"])
-            st.json(st.session_state.get("diagnostics", {}))
+            st.json(st.session.get("diagnostics", {}))
 
     else:
         st.warning(L["no_results"])
