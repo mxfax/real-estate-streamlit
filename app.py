@@ -205,19 +205,6 @@ COMMON_HEADERS = {
     "Upgrade-Insecure-Requests": "1"
 }
 
-def collapse_sidebar():
-    components.html(
-        """
-        <script>
-            const closeButton = window.parent.document.querySelector('button[data-testid="stSidebarCollapseButton"]');
-            if (closeButton) {
-                closeButton.click();
-            }
-        </script>
-        """,
-        height=0,
-        width=0,
-    )
 def clean_num(val):
     if val is None: return None
     cleaned = str(val).replace("€", "").replace("m²", "").replace("m2", "").replace("\xa0", " ").replace(".", "").replace(",", ".").strip()
@@ -349,7 +336,7 @@ def scrape_olx_imoveis(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 3. CUSTOJUSTO (Ensures Full URL Resolution)
+# 3. CUSTOJUSTO (Full URL Resolution)
 # ==============================================================================
 
 def scrape_custojusto(query, max_pages=1):
@@ -382,7 +369,6 @@ def scrape_custojusto(query, max_pages=1):
                                 h_tag = container.find(["h2", "h3"])
                                 title = h_tag.get_text(strip=True) if h_tag else f"Imóvel em {query.title()}"
                             
-                            # CRITICAL FIX: Convert relative link to absolute URL
                             full_link = urllib.parse.urljoin(base_url, href)
 
                             results.append({
@@ -542,10 +528,34 @@ def run_multi_scraper(selected_portals, location, pages):
     return deduped, diagnostics
 
 # ==============================================================================
-# STREAMLIT UI & TRANSLATION CONTROLLER
+# STREAMLIT UI SETUP & SIDEBAR COLLAPSE CONTROLLER
 # ==============================================================================
 
-st.set_page_config(page_title="Portugal Real Estate Intelligence | By Max", page_icon="🇵🇹", layout="wide")
+st.set_page_config(
+    page_title="Portugal Real Estate Intelligence | By Max",
+    page_icon="🇵🇹",
+    layout="wide",
+    initial_sidebar_state="expanded"  # Open on start
+)
+
+# Stateful collapse controller
+if "should_collapse_sidebar" not in st.session_state:
+    st.session_state["should_collapse_sidebar"] = False
+
+if st.session_state["should_collapse_sidebar"]:
+    components.html(
+        """
+        <script>
+            const sidebarBtn = window.parent.document.querySelector('button[data-testid="stSidebarCollapseButton"]');
+            if (sidebarBtn) {
+                sidebarBtn.click();
+            }
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+    st.session_state["should_collapse_sidebar"] = False
 
 if "lang" not in st.session_state:
     st.session_state["lang"] = "EN"
@@ -670,8 +680,9 @@ if search_btn:
     if not selected_portals:
         st.warning(L["warning_select"])
     else:
-        # Automatically collapse sidebar once search begins
-        collapse_sidebar()
+        # Trigger collapse of the sidebar right as search begins
+        st.session_state["should_collapse_sidebar"] = True
+
         with st.spinner(L["fetching"].format(count=len(selected_portals), loc=location_input)):
             raw_results, diag = run_multi_scraper(selected_portals, location_input, pages_per_portal)
 
