@@ -229,9 +229,10 @@ def extract_area(text):
 def scrape_imovirtual(query, max_pages=1):
     results = []
     slug = query.strip().lower().replace(" ", "-")
+    base_url = "https://www.imovirtual.com"
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://www.imovirtual.com/pt/resultados/comprar/apartamento/{slug}?page={page}"
+            url = f"{base_url}/pt/resultados/comprar/apartamento/{slug}?page={page}"
             try:
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200: break
@@ -250,6 +251,7 @@ def scrape_imovirtual(query, max_pages=1):
                             area_val = it.get("areaInSquareMeters")
                             parsed_price = float(price_val) if price_val else None
                             if parsed_price and parsed_price >= 10000:
+                                item_url = urllib.parse.urljoin(base_url, f"/pt/anuncio/{slug_val}") if slug_val else url
                                 results.append({
                                     "portal": "Imovirtual",
                                     "title": title,
@@ -257,7 +259,7 @@ def scrape_imovirtual(query, max_pages=1):
                                     "typology": extract_typology(title),
                                     "area_m2": clean_num(area_val),
                                     "location": query.title(),
-                                    "link": f"https://www.imovirtual.com/pt/anuncio/{slug_val}" if slug_val else url,
+                                    "link": item_url,
                                 })
                         if items: extracted_json = True
                     except Exception: pass
@@ -269,8 +271,8 @@ def scrape_imovirtual(query, max_pages=1):
                         price_elem = card.select_one('[data-cy="listing-item-price"]') or card.find(string=re.compile(r"€"))
                         title_elem = card.select_one('[data-cy="listing-item-title"]') or card.find(["h3", "h2"])
                         if not link_elem: continue
-                        href = link_elem.get("href", "")
-                        full_link = href if href.startswith("http") else f"https://www.imovirtual.com{href}"
+                        raw_href = link_elem.get("href", "")
+                        full_link = urllib.parse.urljoin(base_url, raw_href)
                         card_text = card.get_text(" ", strip=True)
                         parsed_price = clean_num(price_elem.get_text() if hasattr(price_elem, "get_text") else str(price_elem))
                         if parsed_price and parsed_price >= 10000:
@@ -295,9 +297,10 @@ def scrape_imovirtual(query, max_pages=1):
 def scrape_olx_imoveis(query, max_pages=1):
     results = []
     clean_loc = query.strip().lower().replace(" ", "-")
+    base_url = "https://www.olx.pt"
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://www.olx.pt/imoveis/q-{clean_loc}/?page={page}"
+            url = f"{base_url}/imoveis/q-{clean_loc}/?page={page}"
             try:
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200: break
@@ -308,7 +311,8 @@ def scrape_olx_imoveis(query, max_pages=1):
                     if not link_elem or not link_elem.get("href"): continue
                     href = link_elem["href"]
                     if "imovirtual.com" in href: continue
-                    full_link = f"https://www.olx.pt{href}" if href.startswith("/") else href
+
+                    full_link = urllib.parse.urljoin(base_url, href)
                     title_elem = card.find(["h4", "h6"])
                     title = title_elem.get_text(strip=True) if title_elem else "Imóvel OLX"
                     text = card.get_text(" ", strip=True)
@@ -331,23 +335,24 @@ def scrape_olx_imoveis(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 3. CUSTOJUSTO (Bottom-Up Extractor)
+# 3. CUSTOJUSTO (Ensures Full URL Resolution)
 # ==============================================================================
 
 def scrape_custojusto(query, max_pages=1):
     results = []
     clean_query = urllib.parse.quote(query.strip())
+    base_url = "https://www.custojusto.pt"
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://www.custojusto.pt/portugal/imobiliario/apartamentos-venda?q={clean_query}&o={page}"
+            url = f"{base_url}/portugal/imobiliario/apartamentos-venda?q={clean_query}&o={page}"
             try:
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200: break
                 soup = BeautifulSoup(r.text, "lxml")
                 links = soup.find_all("a", href=re.compile(r"-\d{7,10}$"))
                 for a in links:
-                    href = a["href"]
-                    if "/imobiliario/" not in href: continue
+                    href = a.get("href")
+                    if not href or "/imobiliario/" not in href: continue
                     container = a.parent
                     for _ in range(3):
                         if container and "€" in container.get_text(): break
@@ -362,6 +367,10 @@ def scrape_custojusto(query, max_pages=1):
                             if len(title) < 5:
                                 h_tag = container.find(["h2", "h3"])
                                 title = h_tag.get_text(strip=True) if h_tag else f"Imóvel em {query.title()}"
+                            
+                            # CRITICAL FIX: Convert relative link to absolute URL
+                            full_link = urllib.parse.urljoin(base_url, href)
+
                             results.append({
                                 "portal": "CustoJusto",
                                 "title": title[:80],
@@ -369,7 +378,7 @@ def scrape_custojusto(query, max_pages=1):
                                 "typology": extract_typology(text),
                                 "area_m2": extract_area(text),
                                 "location": query.title(),
-                                "link": href
+                                "link": full_link
                             })
                 time.sleep(0.3)
             except Exception:
@@ -377,15 +386,16 @@ def scrape_custojusto(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 4. CENTURY 21 (Universal DOM Extractor)
+# 4. CENTURY 21
 # ==============================================================================
 
 def scrape_century21(query, max_pages=1):
     results = []
     slug = query.strip().lower().replace(" ", "-")
+    base_url = "https://www.century21.pt"
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://www.century21.pt/comprar/apartamentos/{slug}/?page={page}"
+            url = f"{base_url}/comprar/apartamentos/{slug}/?page={page}"
             try:
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200: break
@@ -408,6 +418,9 @@ def scrape_century21(query, max_pages=1):
                             if len(title) < 5:
                                 h_tag = container.find(["h2", "h3", "h4", "h5", "h6"])
                                 title = h_tag.get_text(strip=True) if h_tag else f"Imóvel Century 21"
+                            
+                            full_link = urllib.parse.urljoin(base_url, href)
+
                             results.append({
                                 "portal": "Century 21",
                                 "title": title[:80],
@@ -415,7 +428,7 @@ def scrape_century21(query, max_pages=1):
                                 "typology": extract_typology(text),
                                 "area_m2": extract_area(text),
                                 "location": query.title(),
-                                "link": href if href.startswith("http") else f"https://www.century21.pt{href}"
+                                "link": full_link
                             })
                 time.sleep(0.3)
             except Exception:
@@ -423,19 +436,20 @@ def scrape_century21(query, max_pages=1):
     return results
 
 # ==============================================================================
-# 5. PROPERSTAR (Universal DOM Extractor)
+# 5. PROPERSTAR
 # ==============================================================================
 
 def scrape_properstar(query, max_pages=1):
     results = []
     slug = query.strip().lower().replace(" ", "-")
+    base_url = "https://www.properstar.pt"
     with requests.Session() as session:
         for page in range(1, max_pages + 1):
-            url = f"https://www.properstar.pt/portugal/{slug}/venda/apartamento-casas?p={page}"
+            url = f"{base_url}/portugal/{slug}/venda/apartamento-casas?p={page}"
             try:
                 r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                 if r.status_code != 200:
-                    url = f"https://www.properstar.pt/portugal/{slug}-distrito/venda/apartamento-casas?p={page}"
+                    url = f"{base_url}/portugal/{slug}-distrito/venda/apartamento-casas?p={page}"
                     r = session.get(url, headers=COMMON_HEADERS, impersonate=BROWSER_IMPERSONATE, timeout=REQUEST_TIMEOUT)
                     if r.status_code != 200: break
                 
@@ -458,6 +472,9 @@ def scrape_properstar(query, max_pages=1):
                             if len(title) < 5:
                                 h_tag = container.find(["h2", "h3", "h4"])
                                 title = h_tag.get_text(strip=True) if h_tag else f"Imóvel Properstar"
+                            
+                            full_link = urllib.parse.urljoin(base_url, href)
+
                             results.append({
                                 "portal": "Properstar",
                                 "title": title[:80],
@@ -465,7 +482,7 @@ def scrape_properstar(query, max_pages=1):
                                 "typology": extract_typology(text),
                                 "area_m2": extract_area(text),
                                 "location": query.title(),
-                                "link": href if href.startswith("http") else f"https://www.properstar.pt{href}"
+                                "link": full_link
                             })
                 time.sleep(0.3)
             except Exception:
