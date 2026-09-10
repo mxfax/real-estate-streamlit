@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ==============================================================================
 # TRANSLATION DICTIONARY (EN, PT, UA)
@@ -204,6 +205,19 @@ COMMON_HEADERS = {
     "Upgrade-Insecure-Requests": "1"
 }
 
+def collapse_sidebar():
+    components.html(
+        """
+        <script>
+            const closeButton = window.parent.document.querySelector('button[data-testid="stSidebarCollapseButton"]');
+            if (closeButton) {
+                closeButton.click();
+            }
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 def clean_num(val):
     if val is None: return None
     cleaned = str(val).replace("€", "").replace("m²", "").replace("m2", "").replace("\xa0", " ").replace(".", "").replace(",", ".").strip()
@@ -656,6 +670,8 @@ if search_btn:
     if not selected_portals:
         st.warning(L["warning_select"])
     else:
+        # Automatically collapse sidebar once search begins
+        collapse_sidebar()
         with st.spinner(L["fetching"].format(count=len(selected_portals), loc=location_input)):
             raw_results, diag = run_multi_scraper(selected_portals, location_input, pages_per_portal)
 
