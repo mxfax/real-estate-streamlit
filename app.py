@@ -558,7 +558,6 @@ if st.session_state["should_collapse_sidebar"]:
             let attempts = 0;
             const collapseTimer = setInterval(() => {
                 const parentDoc = window.parent.document;
-                // Try standard collapse button, mobile header button, or aria selector
                 const btn = parentDoc.querySelector('button[data-testid="stSidebarCollapseButton"]') 
                          || parentDoc.querySelector('[data-testid="stSidebarHeader"] button')
                          || parentDoc.querySelector('section[data-testid="stSidebar"] button');
@@ -647,7 +646,6 @@ st.markdown(
         color: #ffffff;
         margin-top: 10px;
     }}
-    /* Mobile-Optimized Property Card */
     .prop-card {{
         background: #ffffff;
         border-radius: 12px;
@@ -768,12 +766,12 @@ if search_btn:
     if not selected_portals:
         st.warning(L["warning_select"])
     else:
-        st.session["should_collapse_sidebar"] = True
+        st.session_state["should_collapse_sidebar"] = True
 
         with st.spinner(L["fetching"].format(count=len(selected_portals), loc=location_input)):
             raw_results, diag = run_multi_scraper(selected_portals, location_input, pages_per_portal)
 
-        st.session["diagnostics"] = diag
+        st.session_state["diagnostics"] = diag
 
         if not raw_results:
             st.error(L["no_results"])
@@ -781,7 +779,7 @@ if search_btn:
             status_text = ", ".join([f"{k}: {v}" for k, v in diag.items() if isinstance(v, int)])
             st.success(L["success_status"].format(total=len(raw_results), status=status_text))
 
-        # Calculate Price per m² & Market Deal Scoring
+        # Price per m² & Market Deal Scoring
         for it in raw_results:
             if it["price"] and it["area_m2"] and it["area_m2"] > 10:
                 it["price_per_m2"] = round(it["price"] / it["area_m2"], 1)
@@ -827,12 +825,12 @@ if search_btn:
         elif sort_choice == "m2":
             filtered.sort(key=lambda x: x["price_per_m2"] if x["price_per_m2"] is not None else float("inf"))
 
-        st.session["real_estate_data"] = filtered
-        st.session["median_m2"] = median_m2
+        st.session_state["real_estate_data"] = filtered
+        st.session_state["median_m2"] = median_m2
 
 # Render Output View
-if "real_estate_data" in st.session:
-    data = st.session["real_estate_data"]
+if "real_estate_data" in st.session_state:
+    data = st.session_state["real_estate_data"]
 
     if data:
         df = pd.DataFrame(data)
@@ -842,7 +840,7 @@ if "real_estate_data" in st.session:
         c1.metric(L["kpi_total"], len(df))
         valid_prices = df["price"].dropna()
         c2.metric(L["kpi_median_price"], f"{valid_prices.median():,.0f} €" if not valid_prices.empty else "N/A")
-        c3.metric(L["kpi_median_m2"], f"{st.session.get('median_m2', 0):,.0f} €/m²")
+        c3.metric(L["kpi_median_m2"], f"{st.session_state.get('median_m2', 0):,.0f} €/m²")
         c4.metric(L["kpi_portals"], df["portal"].nunique())
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -975,7 +973,7 @@ if "real_estate_data" in st.session:
 
         with tab4:
             st.subheader(L["tab_diagnostics"])
-            st.json(st.session.get("diagnostics", {}))
+            st.json(st.session_state.get("diagnostics", {}))
 
     else:
         st.warning(L["no_results"])
